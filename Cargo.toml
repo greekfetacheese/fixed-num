@@ -45,9 +45,10 @@ fastnum          = "0.2.3"
 # Macros
 quote = { version = "1" }
 
+
 # Tests and benchmarks
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-criterion  = { version = "0.5", features = ["real_blackbox"] }
+criterion  = { version = "0.5" }
 
 
 [workspace.lints.clippy]

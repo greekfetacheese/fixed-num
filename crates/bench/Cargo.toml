@@ -7,15 +7,15 @@ publish = false
 
 [dependencies]
 paste        = { workspace = true }
-fixed-num    = { workspace = true }
+fixed-num    = { workspace = true, features = ["serde"] }
 criterion    = { workspace = true }
 serde_json   = { workspace = true }
 validator    = { workspace = true }
-rust_decimal = { workspace = true }
-bigdecimal   = { workspace = true }
+rust_decimal = { workspace = true, features = ["serde"] }
+bigdecimal   = { workspace = true, features = ["serde"] }
 decimal      = { workspace = true }
 fixed        = { workspace = true }
-decimal-rs   = { workspace = true }
+decimal-rs   = { workspace = true, features = ["serde"] }
 fastnum      = { workspace = true }
 
 [lints]
@@ -23,4 +23,8 @@ workspace = true
 
 [[bench]]
 name = "ops"
+harness = false
+
+[[bench]]
+name = "serde_bench"
 harness = false
