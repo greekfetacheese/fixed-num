@@ -3,12 +3,25 @@ use std::fmt;
 use std::fmt::Display;
 use std::ops::Deref;
 
+#[cfg(feature = "serde")]
+use serde::ser::{Serialize, Serializer};
+
 /// A stack-allocated string buffer for FixedNum operations.
 /// This prevents heap allocation when formatting numbers.
 #[derive(Clone, Copy)]
 pub struct FixedString {
    pub buf: [u8; 64],
    pub start: usize, // Where the string starts in the buffer
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for FixedString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self)
+    }
 }
 
 impl Deref for FixedString {

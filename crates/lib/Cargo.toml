@@ -41,11 +41,11 @@ i256_arrow = ["arrow-buffer"]
 mul_opt = []
 
 # Enables serialization and deserialization via the serde crate.
-serde = ["dep:serde"]
+serde = ["dep:serde", "fixed-num-helper/serde"]
 
 # Enables deserialization from float types. We recommend not using this feature and instead using
 # arbitrary-precision deserialization if available.
-serde_float = ["serde"]
+serde_float = ["serde", "fixed-num-helper/serde"]
 
 [[bin]]
 name = "example1"
