@@ -2118,6 +2118,7 @@ impl TryFrom<f64> for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn try_from(value: f64) -> Result<Self, Self::Error> {
+        /*
         let err_nan = "Cannot convert NaN or infinite value to Dec19x19.";
         let err_overflow = "Overflow: Value too large to store in Dec19x19.";
         let err_underflow = "Underflow: Value too small to store in Dec19x19.";
@@ -2132,9 +2133,14 @@ impl TryFrom<f64> for Dec19x19 {
         if repr_f64 < i128::MIN as f64 {
             return Err(err_underflow);
         }
-        Ok(Self {
-            repr: repr_f64 as i128,
-        })
+        */
+
+        let mut buffer = ryu::Buffer::new();
+        let s = buffer.format(value);
+
+        let repr = parse_dec19x19(s).map_err(|_| "Parsing failed")?;
+
+        Ok(Self { repr: repr })
     }
 }
 
@@ -2385,5 +2391,52 @@ impl Format for Dec19x19 {
         }
 
         result
+    }
+}
+
+mod dec19x19_test {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_from_f64() {
+        let float = 1350.60;
+        let dec = Dec19x19::try_from_f64(float).unwrap();
+        assert_eq!(dec, Dec19x19!(1350.60));
+
+        let float = 1350.6045;
+        let dec = Dec19x19::try_from_f64(float).unwrap();
+        assert_eq!(dec, Dec19x19!(1350.6045));
+    }
+
+    #[test]
+    fn test_from_i64() {
+        let int: i64 = 1350;
+        let dec = Dec19x19::from(int);
+        assert_eq!(dec, Dec19x19!(1350));
+
+        let int: i64 = -1350;
+        let dec = Dec19x19::from(int);
+        assert_eq!(dec, Dec19x19!(-1350));
+    }
+
+    #[test]
+    fn test_from_u64() {
+        let int = 1350;
+        let dec = Dec19x19::try_from_u64(int).unwrap();
+        assert_eq!(dec, Dec19x19!(1350));
+    }
+
+    #[test]
+    fn test_from_u128() {
+        let int = 1350;
+        let dec = Dec19x19::try_from_u128(int).unwrap();
+        assert_eq!(dec, Dec19x19!(1350));
+    }
+
+    #[test]
+    fn test_from_str() {
+        let dec = Dec19x19::from_str("1350.60").unwrap();
+        assert_eq!(dec, Dec19x19!(1350.60));
     }
 }

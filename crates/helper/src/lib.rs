@@ -340,7 +340,7 @@ pub struct Formatter {
     pub separator: Option<char>,
     pub precision: Option<usize>,
     pub width: Option<usize>,
-    pub align: Option<std::fmt::Alignment>,
+    pub align: Option<fmt::Alignment>,
     pub fill: char,
     pub sign_plus: bool,
 }

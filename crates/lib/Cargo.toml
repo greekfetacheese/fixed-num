@@ -18,9 +18,11 @@ rand             = { workspace = true }
 arrow-buffer     = { workspace = true, optional = true }
 ethnum           = { workspace = true, optional = true }
 serde            = { workspace = true, optional = true }
+ryu              = { workspace = true }
 
 [dev-dependencies]
 validator = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
