@@ -46,3 +46,7 @@ serde = ["dep:serde"]
 # Enables deserialization from float types. We recommend not using this feature and instead using
 # arbitrary-precision deserialization if available.
 serde_float = ["serde"]
+
+[[bin]]
+name = "example1"
+path = "src/examples/example1.rs"

@@ -1,10 +1,10 @@
+use crate::ops::*;
+use fixed_num_helper::*;
+use paste::paste;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use paste::paste;
 use std::str::FromStr;
-use fixed_num_helper::*;
-use crate::ops::*;
 
 pub use fixed_num_macro::*;
 
@@ -15,31 +15,31 @@ pub use fixed_num_macro::*;
 // during development and they got fixed. On the other hand, the arrow implementation did not have
 // any obvious bugs.
 
-#[cfg(feature="i256_arrow")]
+#[cfg(feature = "i256_arrow")]
 use arrow_buffer::i256;
 
-#[cfg(feature="i256_arrow")]
+#[cfg(feature = "i256_arrow")]
 #[inline(always)]
 const fn i256_from_i128(val: i128) -> i256 {
     i256::from_i128(val)
 }
 
-#[cfg(feature="i256_arrow")]
+#[cfg(feature = "i256_arrow")]
 #[inline(always)]
 fn i256_to_i128(val: i256) -> Option<i128> {
     i256::to_i128(val)
 }
 
-#[cfg(feature="i256_ethnum")]
+#[cfg(feature = "i256_ethnum")]
 use ethnum::I256 as i256;
 
-#[cfg(feature="i256_ethnum")]
+#[cfg(feature = "i256_ethnum")]
 #[inline(always)]
 const fn i256_from_i128(val: i128) -> i256 {
     i256::new(val)
 }
 
-#[cfg(feature="i256_ethnum")]
+#[cfg(feature = "i256_ethnum")]
 #[inline(always)]
 fn i256_to_i128(val: i256) -> Option<i128> {
     i128::try_from(val).ok()
@@ -83,6 +83,287 @@ impl Dec19x19 {
     pub const fn is_zero(self) -> bool {
         self.repr == 0
     }
+}
+
+impl Dec19x19 {
+    /// Returns `true` if the decimal is negative.
+    ///
+    /// # Example
+    /// ```
+    /// # use fixed_num::Dec19x19;
+    /// let neg = Dec19x19::from(-1);
+    /// let pos = Dec19x19::from(1);
+    ///
+    /// assert!(neg.is_sign_negative());
+    /// assert!(!pos.is_sign_negative());
+    /// ```
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_sign_negative(&self) -> bool {
+        self.repr < 0
+    }
+
+    /// Returns `true` if the decimal is positive (including 0).
+    ///
+    /// # Example
+    /// ```
+    /// # use fixed_num::Dec19x19;
+    /// let neg = Dec19x19::from(-1);
+    /// let pos = Dec19x19::from(1);
+    /// let zero = Dec19x19::from(0);
+    ///
+    /// assert!(!neg.is_sign_positive());
+    /// assert!(pos.is_sign_positive());
+    /// assert!(zero.is_sign_positive());
+    /// ```
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_sign_positive(&self) -> bool {
+        self.repr >= 0
+    }
+
+    /// Returns the smallest scale possible for this number without losing precision.
+    ///
+    /// Because `Dec19x19` does not store trailing zeros from input,
+    /// `1.50` becomes `1.5` in memory. This function will return `1` for both.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use fixed_num::Dec19x19;
+    /// # use std::str::FromStr;
+    ///
+    /// let val = Dec19x19::from_str("1.5000").unwrap();
+    ///
+    /// // The extra zeros are already gone from the internal representation
+    /// assert_eq!(val.min_scale(), 1);
+    ///
+    /// let val2 = Dec19x19::from_str("1.234").unwrap();
+    /// assert_eq!(val2.min_scale(), 3);
+    ///
+    /// let val3 = Dec19x19::from_str("0.001").unwrap();
+    /// assert_eq!(val3.min_scale(), 3);
+    /// ```
+    #[inline(always)]
+    pub fn min_scale(&self) -> u32 {
+        if self.repr == 0 {
+            return 0;
+        }
+
+        let val = self.repr.unsigned_abs(); // Treat as unsigned to handle I128_MIN
+
+        // If it perfectly divides 10^19, it's an integer (scale 0)
+        // Optimization: Check mod FRAC_SCALE first (constant op)
+        if val % (FRAC_SCALE_U128) == 0 {
+            return 0;
+        }
+
+        let mut frac = val % (FRAC_SCALE_U128);
+        let mut zeros = 0;
+
+        // Count how many times we can divide by 10
+        while frac > 0 && frac % 10 == 0 {
+            frac /= 10;
+            zeros += 1;
+        }
+
+        19 - zeros
+    }
+
+    /// Converts the number to a string with a guaranteed minimum number of fractional digits.
+    ///
+    /// If the number has fewer significant digits than `min_decimals`, it pads with zeros.
+    /// If the number has *more* significant digits, it expands to show all of them (it does not truncate).
+    ///
+    /// # Arguments
+    /// * `min_decimals` - The minimum number of decimal places to display (clamped to 19).
+    ///
+    /// # Example
+    /// ```
+    /// # use fixed_num::Dec19x19;
+    /// # use std::str::FromStr;
+    /// let val = Dec19x19::from_str("1.5").unwrap();
+    ///
+    /// // Pads to 2 decimals
+    /// assert_eq!(val.to_string_with_precision(2), "1.50");
+    ///
+    /// // Pads to 3 decimals
+    /// assert_eq!(val.to_string_with_precision(3), "1.500");
+    ///
+    /// // Existing precision determines length if it's greater than requested
+    /// let precise = Dec19x19::from_str("1.2345").unwrap();
+    /// assert_eq!(precise.to_string_with_precision(2), "1.2345");
+    /// ```
+    #[inline(always)]
+    pub fn to_string_with_precision(&self, min_decimals: usize) -> String {
+        // Bounds check and abs value
+        let min_decimals = min_decimals.min(19);
+        let val = self.repr.unsigned_abs(); // Handles i128::MIN correctly
+        let scale_u128 = FRAC_SCALE_U128;
+
+        let int_part = val / scale_u128;
+        let frac_part = val % scale_u128;
+
+        // Calculate actual significant digits in the number
+        // e.g., 0.500...00 -> 1 significant digit
+        let mut significant_digits = 0;
+        if frac_part > 0 {
+            let mut temp = frac_part;
+            let mut zeros = 0;
+            // Divide by 10 until we hit a non-zero to count trailing zeros
+            // (There are max 19 digits)
+            while temp % 10 == 0 {
+                temp /= 10;
+                zeros += 1;
+            }
+            significant_digits = 19 - zeros;
+        }
+
+        // Determine target length: Max of what's there vs what's requested
+        let needed = min_decimals.max(significant_digits);
+
+        // Allocation: Pre-calculate capacity to avoid re-allocations
+        // Sign(1) + Int(39) + Dot(1) + Frac(19) = ~60 chars max
+        let mut s = String::with_capacity(64);
+
+        if self.repr < 0 {
+            s.push('-');
+        }
+
+        // Write Integer Part
+        // Using built-in to_string is fast enough for the int part usually,
+        // but since we want zero dependency we can just push it.
+        s.push_str(&int_part.to_string());
+
+        // Write Fractional Part (Left-to-Right extraction)
+        if needed > 0 {
+            s.push('.');
+
+            // We need to extract digits from the 19-digit fixed number `frac_part`.
+            // The digit at index `i` (0 to 18) corresponds to 10^(18-i).
+            // We iterate exactly `needed` times.
+            for i in 0..needed {
+                // Access the power of 10 table (10^18 down to 10^0)
+                // POW10 is [1, 10, 100...]. index 18 is 10^18.
+                let power_idx = 18 - i;
+
+                let power = crate::i128_ops::POW10[power_idx] as u128;
+
+                // Extract specific digit
+                let digit = (frac_part / power) % 10;
+
+                s.push((b'0' + digit as u8) as char);
+            }
+        }
+
+        s
+    }
+
+    /// Formats the number with a minimum precision using a stack-allocated buffer.
+    /// This performs **zero heap allocations**.
+    ///
+    /// The returned `FixedString` behaves exactly like an `&str` (via Deref).
+    ///
+    /// # Example
+    /// ```
+    /// # use fixed_num::*;
+    /// let n = Dec19x19::try_from(1.5).unwrap();
+    ///
+    /// // Returns a lightweight struct, no String::new() call
+    /// let s = n.format_prec(2);
+    ///
+    /// // Use it just like an &str
+    /// assert_eq!(&*s, "1.50");
+    /// ```
+    pub fn format_prec(&self, min_decimals: usize) -> FixedString {
+        let mut buf = [0u8; 64];
+        let mut curr = 64;
+
+        // Setup
+        let min_decimals = min_decimals.min(19);
+        let val = self.repr.unsigned_abs(); // Handles i128::MIN
+        let scale_u128 = FRAC_SCALE_U128; // 10^19
+
+        let mut int_part = val / scale_u128;
+        let mut frac_part = val % scale_u128;
+
+        // Write Backwards
+
+        // Handle Fractions
+        // Determine how many digits we actually have
+        let mut actual_sig_digits = 0;
+        if frac_part > 0 {
+            // Quick count of significant digits by checking trailing zeros
+            // We can reuse the POW10 logic or simple division to find "real" end
+            let mut temp = frac_part;
+            let mut zeros = 0;
+            while temp > 0 && temp % 10 == 0 {
+                temp /= 10;
+                zeros += 1;
+            }
+            actual_sig_digits = 19 - zeros;
+
+            // Optimization: Normalize frac_part to be just the integers we need
+            // e.g., 500...00 (19 digits) becomes just 5
+            if zeros > 0 {
+                // Using POW10 table for speed if available, or calc
+                frac_part /= crate::i128_ops::POW10[zeros] as u128;
+            }
+        }
+
+        let needed_decimals = min_decimals.max(actual_sig_digits);
+
+        if needed_decimals > 0 {
+            // Padding Logic (Write '0's)
+            // If we need 2 decimals ("1.50") but have 1 ("1.5"), we write 1 zero.
+            let padding = needed_decimals.saturating_sub(actual_sig_digits);
+            for _ in 0..padding {
+                curr -= 1;
+                buf[curr] = b'0';
+            }
+
+            // Actual Digit Logic
+            // Write the significant fractional digits backwards
+            for _ in 0..actual_sig_digits {
+                let digit = (frac_part % 10) as u8;
+                curr -= 1;
+                buf[curr] = b'0' + digit;
+                frac_part /= 10;
+            }
+
+            // Decimal Point
+            curr -= 1;
+            buf[curr] = b'.';
+        }
+
+        // Handle Integers
+        if int_part == 0 {
+            curr -= 1;
+            buf[curr] = b'0';
+        } else {
+            while int_part > 0 {
+                let digit = (int_part % 10) as u8;
+                curr -= 1;
+                buf[curr] = b'0' + digit;
+                int_part /= 10;
+            }
+        }
+
+        // Sign
+        if self.repr < 0 {
+            curr -= 1;
+            buf[curr] = b'-';
+        }
+
+        FixedString { buf, start: curr }
+    }
+}
+
+// Contants
+impl Dec19x19 {
+    pub const ZERO: Self = Dec19x19!(0);
+    pub const ONE: Self = Dec19x19!(1);
+    pub const TWO: Self = Dec19x19!(2);
 }
 
 // =================
@@ -142,14 +423,18 @@ impl std::iter::Step for Dec19x19 {
     #[inline(always)]
     unsafe fn forward_unchecked(start: Self, count: usize) -> Self {
         unsafe {
-            Self::from_repr(<i128 as std::iter::Step>::forward_unchecked(start.repr, count))
+            Self::from_repr(<i128 as std::iter::Step>::forward_unchecked(
+                start.repr, count,
+            ))
         }
     }
 
     #[inline(always)]
     unsafe fn backward_unchecked(start: Self, count: usize) -> Self {
         unsafe {
-            Self::from_repr(<i128 as std::iter::Step>::backward_unchecked(start.repr, count))
+            Self::from_repr(<i128 as std::iter::Step>::backward_unchecked(
+                start.repr, count,
+            ))
         }
     }
 
@@ -361,7 +646,7 @@ macro_rules! const_impl {
 // === Max / Min ===
 // =================
 
-const_impl!{
+const_impl! {
 /// The biggest possible value that can be stored in a `Dec19x19`, equal to
 /// ```
 /// # assert_eq!(fixed_num::Dec19x19!(
@@ -375,7 +660,7 @@ impl HasMax for Dec19x19 {
     }
 }}
 
-const_impl!{
+const_impl! {
 /// The smallest possible value that can be stored in a `Dec19x19`, equal to
 /// ```
 /// # assert_eq!(fixed_num::Dec19x19!(
@@ -393,7 +678,7 @@ impl HasMin for Dec19x19 {
 // === Signum ===
 // ==============
 
-const_impl!{
+const_impl! {
 /// # Tests
 ///
 /// ```
@@ -453,7 +738,7 @@ impl Neg for Dec19x19 {
 // === Abs ===
 // ===========
 
-const_impl!{
+const_impl! {
 /// # Tests
 ///
 /// ```
@@ -507,7 +792,9 @@ impl Rem for Dec19x19 {
         } else if self == Self::MIN && rhs == -Self::SMALLEST_STEP {
             Dec19x19!(0)
         } else {
-            Self { repr: self.repr % rhs.repr }
+            Self {
+                repr: self.repr % rhs.repr,
+            }
         }
     }
 }
@@ -550,7 +837,7 @@ impl Add for Dec19x19 {
     }
 }
 
-const_impl!{ impl UncheckedAdd for Dec19x19 {
+const_impl! { impl UncheckedAdd for Dec19x19 {
     type Output = Self;
     #[track_caller]
     #[inline(always)]
@@ -559,7 +846,7 @@ const_impl!{ impl UncheckedAdd for Dec19x19 {
     }
 }}
 
-const_impl!{ impl CheckedAdd for Dec19x19 {
+const_impl! { impl CheckedAdd for Dec19x19 {
     type Output = Self;
     #[track_caller]
     #[inline(always)]
@@ -572,7 +859,7 @@ const_impl!{ impl CheckedAdd for Dec19x19 {
     }
 }}
 
-const_impl!{
+const_impl! {
 /// # Tests
 ///
 /// ```
@@ -644,7 +931,7 @@ impl Sub for Dec19x19 {
     }
 }
 
-const_impl!{ impl UncheckedSub for Dec19x19 {
+const_impl! { impl UncheckedSub for Dec19x19 {
     type Output = Self;
     #[track_caller]
     #[inline(always)]
@@ -653,7 +940,7 @@ const_impl!{ impl UncheckedSub for Dec19x19 {
     }
 }}
 
-const_impl!{ impl CheckedSub for Dec19x19 {
+const_impl! { impl CheckedSub for Dec19x19 {
     type Output = Self;
     #[track_caller]
     #[inline(always)]
@@ -666,7 +953,7 @@ const_impl!{ impl CheckedSub for Dec19x19 {
     }
 }}
 
-const_impl!{
+const_impl! {
 /// # Tests
 ///
 /// ```
@@ -765,8 +1052,8 @@ impl Dec19x19 {
     pub fn unchecked_mul_no_opt(self, rhs: Self) -> Self {
         // 1) sign & magnitudes
         let neg = (self.repr < 0) ^ (rhs.repr < 0);
-        let ua  = self.repr.unsigned_abs();
-        let ub  = rhs.repr.unsigned_abs();
+        let ua = self.repr.unsigned_abs();
+        let ub = rhs.repr.unsigned_abs();
 
         // 2) split into integer/fraction parts
         let ai = ua / FRAC_SCALE_U128;
@@ -775,14 +1062,16 @@ impl Dec19x19 {
         let bf = ub % FRAC_SCALE_U128;
 
         // 3) 128×128 multiplies
-        let int   = ai * bi;
+        let int = ai * bi;
         let cross = ai * bf + bi * af;
-        let frac  = af * bf / FRAC_SCALE_U128;
+        let frac = af * bf / FRAC_SCALE_U128;
 
         // 4) reassemble
         let mag = int * FRAC_SCALE_U128 + cross + frac;
         let mut repr: i128 = mag.try_into().expect("Overflow");
-        if neg { repr = -repr; }
+        if neg {
+            repr = -repr;
+        }
         Self { repr }
     }
 
@@ -794,8 +1083,8 @@ impl Dec19x19 {
     pub fn unchecked_mul_opt(self, rhs: Self) -> Self {
         // 1) sign & magnitudes
         let neg = (self.repr < 0) ^ (rhs.repr < 0);
-        let ua  = self.repr.unsigned_abs();
-        let ub  = rhs.repr.unsigned_abs();
+        let ua = self.repr.unsigned_abs();
+        let ub = rhs.repr.unsigned_abs();
 
         // 2) split into integer/fraction parts
         let bi = ub / FRAC_SCALE_U128;
@@ -826,7 +1115,9 @@ impl Dec19x19 {
 
         // 4) reassemble
         let mut repr: i128 = mag.try_into().expect("Overflow");
-        if neg { repr = -repr; }
+        if neg {
+            repr = -repr;
+        }
         Self { repr }
     }
 
@@ -837,8 +1128,8 @@ impl Dec19x19 {
     pub fn checked_mul_no_opt(self, rhs: Self) -> Option<Self> {
         // 1) sign & magnitudes
         let neg = (self.repr < 0) ^ (rhs.repr < 0);
-        let ua  = self.repr.unsigned_abs();
-        let ub  = rhs.repr.unsigned_abs();
+        let ua = self.repr.unsigned_abs();
+        let ub = rhs.repr.unsigned_abs();
 
         // 2) split into integer/fraction parts
         let ai = ua / FRAC_SCALE_U128;
@@ -847,19 +1138,21 @@ impl Dec19x19 {
         let bf = ub % FRAC_SCALE_U128;
 
         // 3) 128×128 multiplies
-        let int      = ai.checked_mul(bi)?;
-        let t1       = ai.checked_mul(bf)?;
-        let t2       = bi.checked_mul(af)?;
-        let cross    = t1.checked_add(t2)?;
+        let int = ai.checked_mul(bi)?;
+        let t1 = ai.checked_mul(bf)?;
+        let t2 = bi.checked_mul(af)?;
+        let cross = t1.checked_add(t2)?;
         let frac_mul = af.checked_mul(bf)?;
-        let frac     = frac_mul / FRAC_SCALE_U128; // Safe
+        let frac = frac_mul / FRAC_SCALE_U128; // Safe
 
         // 4) reassemble
         let scaled_int = int.checked_mul(FRAC_SCALE_U128)?;
-        let sum1       = scaled_int.checked_add(cross)?;
-        let mag        = sum1.checked_add(frac)?;
+        let sum1 = scaled_int.checked_add(cross)?;
+        let mag = sum1.checked_add(frac)?;
         let mut repr: i128 = mag.try_into().ok()?;
-        if neg { repr = repr.checked_neg()?; }
+        if neg {
+            repr = repr.checked_neg()?;
+        }
         Some(Self { repr })
     }
 
@@ -870,8 +1163,8 @@ impl Dec19x19 {
     pub fn checked_mul_opt(self, rhs: Self) -> Option<Self> {
         // 1) sign & magnitudes
         let neg = (self.repr < 0) ^ (rhs.repr < 0);
-        let ua  = self.repr.unsigned_abs();
-        let ub  = rhs.repr.unsigned_abs();
+        let ua = self.repr.unsigned_abs();
+        let ub = rhs.repr.unsigned_abs();
 
         // 2) split into integer/fraction parts
 
@@ -884,9 +1177,9 @@ impl Dec19x19 {
         } else if bi == 0 {
             let ai = ua / FRAC_SCALE_U128;
             let af = ua % FRAC_SCALE_U128;
-            let cross    = ai.checked_mul(bf)?;
+            let cross = ai.checked_mul(bf)?;
             let frac_mul = af.checked_mul(bf)?;
-            let frac     = frac_mul / FRAC_SCALE_U128; // Safe
+            let frac = frac_mul / FRAC_SCALE_U128; // Safe
             cross.checked_add(frac)?
         } else {
             let ai = ua / FRAC_SCALE_U128;
@@ -896,17 +1189,19 @@ impl Dec19x19 {
                 let cross = ai.checked_mul(bf)?;
                 int.checked_add(cross)?
             } else {
-                let t1       = ai.checked_mul(bf)?;
-                let t2       = bi.checked_mul(af)?;
-                let cross    = t1.checked_add(t2)?;
+                let t1 = ai.checked_mul(bf)?;
+                let t2 = bi.checked_mul(af)?;
+                let cross = t1.checked_add(t2)?;
                 let frac_mul = af.checked_mul(bf)?;
-                let frac     = frac_mul / FRAC_SCALE_U128; // Safe
-                let sum1     = int.checked_add(cross)?;
+                let frac = frac_mul / FRAC_SCALE_U128; // Safe
+                let sum1 = int.checked_add(cross)?;
                 sum1.checked_add(frac)?
             }
         };
         let mut repr: i128 = mag.try_into().ok()?;
-        if neg { repr = repr.checked_neg()?; }
+        if neg {
+            repr = repr.checked_neg()?;
+        }
         Some(Self { repr })
     }
 }
@@ -917,9 +1212,13 @@ impl UncheckedMul for Dec19x19 {
     #[inline(always)]
     fn unchecked_mul(self, rhs: Self) -> Self {
         #[cfg(feature = "mul_opt")]
-        { self.unchecked_mul_opt(rhs) }
+        {
+            self.unchecked_mul_opt(rhs)
+        }
         #[cfg(not(feature = "mul_opt"))]
-        { self.unchecked_mul_no_opt(rhs) }
+        {
+            self.unchecked_mul_no_opt(rhs)
+        }
     }
 }
 
@@ -929,9 +1228,13 @@ impl CheckedMul for Dec19x19 {
     #[inline(always)]
     fn checked_mul(self, rhs: Self) -> Option<Self> {
         #[cfg(feature = "mul_opt")]
-        { self.checked_mul_opt(rhs) }
+        {
+            self.checked_mul_opt(rhs)
+        }
         #[cfg(not(feature = "mul_opt"))]
-        { self.checked_mul_no_opt(rhs) }
+        {
+            self.checked_mul_no_opt(rhs)
+        }
     }
 }
 
@@ -950,9 +1253,13 @@ impl SaturatingMul for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn saturating_mul(self, rhs: Self) -> Self {
-        self.checked_mul(rhs).unwrap_or_else(||
-            if self.signum_i128() * rhs.signum_i128() > 0 { Self::MAX } else { Self::MIN },
-        )
+        self.checked_mul(rhs).unwrap_or_else(|| {
+            if self.signum_i128() * rhs.signum_i128() > 0 {
+                Self::MAX
+            } else {
+                Self::MIN
+            }
+        })
     }
 }
 
@@ -1013,9 +1320,13 @@ impl UncheckedDiv for Dec19x19 {
         let scaled_lhs = lhs_i256 * FRAC_SCALE_I256;
         let result = scaled_lhs / rhs.repr;
         #[cfg(inherit_overflow_checks)]
-        { Self::from_repr(i256_to_i128(result).expect("Overflow in Dec19x19 division")) }
+        {
+            Self::from_repr(i256_to_i128(result).expect("Overflow in Dec19x19 division"))
+        }
         #[cfg(not(inherit_overflow_checks))]
-        { Self::from_repr(result.as_i128()) }
+        {
+            Self::from_repr(result.as_i128())
+        }
     }
 }
 
@@ -1045,9 +1356,13 @@ impl SaturatingDiv for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn saturating_div(self, rhs: Self) -> Self {
-        self.checked_div(rhs).unwrap_or_else(||
-            if self.signum_i128() * rhs.signum_i128() >= 0 { Self::MAX } else { Self::MIN },
-        )
+        self.checked_div(rhs).unwrap_or_else(|| {
+            if self.signum_i128() * rhs.signum_i128() >= 0 {
+                Self::MAX
+            } else {
+                Self::MIN
+            }
+        })
     }
 }
 
@@ -1094,11 +1409,13 @@ impl Dec19x19 {
     #[inline(always)]
     const fn trunc_impl(self, scale: i128) -> Self {
         let int_part = self.repr / scale;
-        Self { repr: int_part * scale }
+        Self {
+            repr: int_part * scale,
+        }
     }
 }
 
-const_impl!{ impl Trunc for Dec19x19 {
+const_impl! { impl Trunc for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn trunc(self) -> Self {
@@ -1106,7 +1423,7 @@ const_impl!{ impl Trunc for Dec19x19 {
     }
 }}
 
-const_impl!{ impl TruncTo for Dec19x19 {
+const_impl! { impl TruncTo for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn trunc_to(self, digits: i64) -> Self {
@@ -1170,7 +1487,7 @@ impl Dec19x19 {
     }
 }
 
-const_impl!{ impl Floor for Dec19x19 {
+const_impl! { impl Floor for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn floor(self) -> Self {
@@ -1178,7 +1495,7 @@ const_impl!{ impl Floor for Dec19x19 {
     }
 }}
 
-const_impl!{ impl FloorTo for Dec19x19 {
+const_impl! { impl FloorTo for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn floor_to(self, digits: i64) -> Self {
@@ -1243,7 +1560,7 @@ impl Dec19x19 {
     }
 }
 
-const_impl!{ impl Ceil for Dec19x19 {
+const_impl! { impl Ceil for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn ceil(self) -> Self {
@@ -1251,7 +1568,7 @@ const_impl!{ impl Ceil for Dec19x19 {
     }
 }}
 
-const_impl!{ impl CeilTo for Dec19x19 {
+const_impl! { impl CeilTo for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn ceil_to(self, digits: i64) -> Self {
@@ -1373,11 +1690,13 @@ impl Dec19x19 {
         } else {
             self.repr / scale
         };
-        Self { repr: rounded * scale }
+        Self {
+            repr: rounded * scale,
+        }
     }
 }
 
-const_impl!{ impl Round for Dec19x19 {
+const_impl! { impl Round for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn round(self) -> Self {
@@ -1385,7 +1704,7 @@ const_impl!{ impl Round for Dec19x19 {
     }
 }}
 
-const_impl!{ impl RoundTo for Dec19x19 {
+const_impl! { impl RoundTo for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn round_to(self, digits: i64) -> Self {
@@ -1468,7 +1787,7 @@ impl CheckedSqrt for Dec19x19 {
 // === Log10Floor ===
 // ==================
 
-const_impl!{
+const_impl! {
 /// # Tests
 ///
 /// ```
@@ -1498,7 +1817,7 @@ impl UncheckedLog10Floor for Dec19x19 {
     }
 }}
 
-const_impl!{ impl CheckedLog10Floor for Dec19x19 {
+const_impl! { impl CheckedLog10Floor for Dec19x19 {
     #[track_caller]
     #[inline(always)]
     fn checked_log10_floor(self) -> Option<Self> {
@@ -1517,7 +1836,7 @@ const_impl!{ impl CheckedLog10Floor for Dec19x19 {
 // sqrt(2) * 10^19   = 1.4142135623730950488e19
 const SQRT2_UP_I128: i128 = 14_142_135_623_730_950_488;
 // (10^19 / sqrt(2)) = 7.071067811865475244e18
-const SQRT2_DN_I128: i128 =  7_071_067_811_865_475_244;
+const SQRT2_DN_I128: i128 = 7_071_067_811_865_475_244;
 
 const SQRT2_UP_I256: i256 = i256_from_i128(SQRT2_UP_I128);
 const SQRT2_DN_I256: i256 = i256_from_i128(SQRT2_DN_I128);
@@ -1544,12 +1863,12 @@ impl UncheckedLn for Dec19x19 {
         debug_assert!(self.repr > 0);
 
         // 1) lift into i256
-        let mut v      = i256_from_i128(self.repr);
-        let scale      = FRAC_SCALE_I256;  // = 10^19 in i256
-        let two        = I256_TWO;
-        let ln2        = LN_2_I256;
-        let sqrt2_up   = SQRT2_UP_I256;    // = scale*√2
-        let sqrt2_dn   = SQRT2_DN_I256;    // = scale/√2
+        let mut v = i256_from_i128(self.repr);
+        let scale = FRAC_SCALE_I256; // = 10^19 in i256
+        let two = I256_TWO;
+        let ln2 = LN_2_I256;
+        let sqrt2_up = SQRT2_UP_I256; // = scale*√2
+        let sqrt2_dn = SQRT2_DN_I256; // = scale/√2
 
         // 2) range‑reduce v so that v ∈ [scale/√2, scale*√2]
         let mut exp = 0i128;
@@ -1569,8 +1888,8 @@ impl UncheckedLn for Dec19x19 {
 
         // 4) atanh-series: ln(v/scale) = 2·Σₖ [ u^(2k+1) / (2k+1) ]
         let mut u_pow = u;
-        let mut sum   = u;
-        let mut k     = 1i128;
+        let mut sum = u;
+        let mut k = 1i128;
         loop {
             // u_pow ← u_pow · u² / scale²
             u_pow = (u_pow * u / scale) * u / scale;
@@ -1588,9 +1907,13 @@ impl UncheckedLn for Dec19x19 {
 
         // 6) to Dec19x19, preserving your overflow‑checks cfg
         #[cfg(inherit_overflow_checks)]
-        { Self::from_repr(i256_to_i128(result).expect("Overflow")) }
+        {
+            Self::from_repr(i256_to_i128(result).expect("Overflow"))
+        }
         #[cfg(not(inherit_overflow_checks))]
-        { Self::from_repr(result.as_i128()) }
+        {
+            Self::from_repr(result.as_i128())
+        }
     }
 }
 
@@ -1663,17 +1986,21 @@ impl UncheckedPow<i32> for Dec19x19 {
     #[inline(always)]
     fn unchecked_pow(self, exp: i32) -> Self::Output {
         let mut result = Dec19x19!(1);
-        let mut base   = if exp >= 0 { self } else { Dec19x19!(1) / self };
-        let mut e      = exp.unsigned_abs();
-        macro_rules! step {() => {
-            let e2 = e / 2;
-            let f2 = e % 2;
-            if f2 == 1 {
-                result *= base;
-            }
-            e = e2;
-        };}
-        if e > 0 { step!(); }
+        let mut base = if exp >= 0 { self } else { Dec19x19!(1) / self };
+        let mut e = exp.unsigned_abs();
+        macro_rules! step {
+            () => {
+                let e2 = e / 2;
+                let f2 = e % 2;
+                if f2 == 1 {
+                    result *= base;
+                }
+                e = e2;
+            };
+        }
+        if e > 0 {
+            step!();
+        }
         while e > 0 {
             base = base * base;
             step!();
@@ -1688,17 +2015,21 @@ impl CheckedPow<i32> for Dec19x19 {
     #[inline(always)]
     fn checked_pow(self, exp: i32) -> Option<Self::Output> {
         let mut result = Dec19x19!(1);
-        let mut base   = if exp >= 0 { self } else { Dec19x19!(1) / self };
-        let mut e      = exp.unsigned_abs();
-        macro_rules! step {() => {
-            let e2 = e / 2;
-            let f2 = e % 2;
-            if f2 == 1 {
-                result = result.checked_mul(base)?;
-            }
-            e = e2;
-        };}
-        if e > 0 { step!(); }
+        let mut base = if exp >= 0 { self } else { Dec19x19!(1) / self };
+        let mut e = exp.unsigned_abs();
+        macro_rules! step {
+            () => {
+                let e2 = e / 2;
+                let f2 = e % 2;
+                if f2 == 1 {
+                    result = result.checked_mul(base)?;
+                }
+                e = e2;
+            };
+        }
+        if e > 0 {
+            step!();
+        }
         while e > 0 {
             base = base.checked_mul(base)?;
             step!();
@@ -1750,7 +2081,7 @@ macro_rules! gen_fn_try_from_x_for_fix128 {
 // Creates a new `Dec19x19` from the given `i64` integer, assuming it has no fractional part.
 // It is safe, as i64 has at most 19 digits.
 gen_from_x_for_fix128! { i64, i32, i16, i8, u32, u16, u8 }
-gen_fn_try_from_x_for_fix128!{ i128, u64, u128, f32, f64 }
+gen_fn_try_from_x_for_fix128! { i128, u64, u128, f32, f64 }
 
 impl TryFrom<i128> for Dec19x19 {
     type Error = &'static str;
@@ -1792,10 +2123,18 @@ impl TryFrom<f64> for Dec19x19 {
         let err_underflow = "Underflow: Value too small to store in Dec19x19.";
         let scaled = value * FRAC_SCALE_I128 as f64;
         let repr_f64 = scaled.round();
-        if !repr_f64.is_finite() { return Err(err_nan); }
-        if repr_f64 > i128::MAX as f64 { return Err(err_overflow); }
-        if repr_f64 < i128::MIN as f64 { return Err(err_underflow); }
-        Ok(Self { repr: repr_f64 as i128 })
+        if !repr_f64.is_finite() {
+            return Err(err_nan);
+        }
+        if repr_f64 > i128::MAX as f64 {
+            return Err(err_overflow);
+        }
+        if repr_f64 < i128::MIN as f64 {
+            return Err(err_underflow);
+        }
+        Ok(Self {
+            repr: repr_f64 as i128,
+        })
     }
 }
 
@@ -1803,7 +2142,7 @@ impl TryFrom<f32> for Dec19x19 {
     type Error = &'static str;
     #[track_caller]
     #[inline(always)]
-    fn try_from(value: f32) -> Result<Self, Self::Error>  {
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
         (value as f64).try_into()
     }
 }
@@ -1929,7 +2268,7 @@ impl From<Dec19x19> for f32 {
 impl FromStr for Dec19x19 {
     type Err = ParseDec19x19Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let repr = parse_dec19x19_internal(s)?;
+        let repr = parse_dec19x19(s).map_err(|err| ParseDec19x19Error::Custom(err))?;
         Ok(Self { repr })
     }
 }
@@ -1979,7 +2318,9 @@ impl std::fmt::Debug for Dec19x19 {
 // Tested in README.md.
 impl Format for Dec19x19 {
     fn format(&self, f: &mut Formatter) -> String {
-        let this = f.precision.map_or(*self, |p| self.round_to(p.min(19) as i64));
+        let this = f
+            .precision
+            .map_or(*self, |p| self.round_to(p.min(19) as i64));
         let int_part = this.repr / FRAC_SCALE_I128;
         let frac_part = (this.repr % FRAC_SCALE_I128).abs();
 
