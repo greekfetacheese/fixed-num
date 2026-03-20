@@ -11,10 +11,12 @@ keywords = []
 
 [dependencies]
 serde = { workspace = true, optional = true }
+bincode-next = { workspace = true, optional = true }
 
 [features]
 # Enables serialization and deserialization via the serde crate.
 serde = ["dep:serde"]
+bincode = ["dep:bincode-next"]
 
 [lints]
 workspace = true

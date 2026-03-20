@@ -18,6 +18,7 @@ rand             = { workspace = true }
 arrow-buffer     = { workspace = true, optional = true }
 ethnum           = { workspace = true, optional = true }
 serde            = { workspace = true, optional = true }
+bincode-next     = { workspace = true, optional = true }
 ryu              = { workspace = true }
 
 [dev-dependencies]
@@ -44,6 +45,9 @@ mul_opt = []
 
 # Enables serialization and deserialization via the serde crate.
 serde = ["dep:serde", "fixed-num-helper/serde"]
+
+# Enables serialization and deserialization via the bincode crate.
+bincode = ["dep:bincode-next", "fixed-num-helper/bincode"]
 
 # Enables deserialization from float types. We recommend not using this feature and instead using
 # arbitrary-precision deserialization if available.

@@ -33,6 +33,7 @@ ethnum           = { version = "1.5.1" }
 paste            = { default-features = false, version = "1", features = [] }
 rand             = { default-features = false, version = "0.9", features = ["std_rng"] }
 serde            = { version = "1" }
+bincode-next     = { version = "2" }
 ryu              = { version = "1" }
 
 # Benchmarks
