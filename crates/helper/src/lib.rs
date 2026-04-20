@@ -6,12 +6,19 @@ use std::ops::Deref;
 #[cfg(feature = "serde")]
 use serde::ser::{Serialize, Serializer};
 
+const POWERS_OF_TEN_128: [u128; 20] = [
+    1, 10, 100, 1000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000,
+    10_000_000_000, 100_000_000_000, 1_000_000_000_000, 10_000_000_000_000,
+    100_000_000_000_000, 1_000_000_000_000_000, 10_000_000_000_000_000,
+    100_000_000_000_000_000, 1_000_000_000_000_000_000, 10_000_000_000_000_000_000,
+];
+
 /// A stack-allocated string buffer for FixedNum operations.
 /// This prevents heap allocation when formatting numbers.
 #[derive(Clone, Copy)]
 pub struct FixedString {
    pub buf: [u8; 64],
-   pub start: usize, // Where the string starts in the buffer
+   pub start: usize,
 }
 
 #[cfg(feature = "serde")]
@@ -164,122 +171,111 @@ pub fn shift_decimal(int_part: &str, frac_part: &str, exp: i128) -> (String, Str
     (int_part, frac_part)
 }
 
-/// A highly optimized parser for "Integer.Fraction" decimal format.
-/// Falls back to the standard parser for scientific notation.
 #[inline(always)]
 pub fn parse_dec19x19(s: &str) -> Result<i128, String> {
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-
-    if len == 0 {
+    let mut bytes = s.as_bytes();
+    if bytes.is_empty() {
         return Err("Empty string".to_string());
     }
 
-    let mut i = 0;
-    let negative = if bytes[0] == b'-' {
-        i += 1;
-        true
-    } else {
-        false
-    };
-
-    if i < len && bytes[i] == b'+' {
-        i += 1;
+    // Handle sign and strip it from the slice to simplify length calculations
+    let mut negative = false;
+    match bytes[0] {
+        b'-' => { negative = true; bytes = &bytes[1..]; },
+        b'+' => { bytes = &bytes[1..]; },
+        _ => {}
     }
 
-    let mut val: u128 = 0;
-    let mut frac_found = false;
-    let mut frac_digits = 0;
+    let len = bytes.len();
+    if len == 0 {
+        return Err("Invalid string".to_string());
+    }
 
-    while i < len {
-        let b = bytes[i];
+    // ====================================================================
+    // FAST PATH: Numbers <= 19 characters perfectly fit in u64 during parsing
+    // ====================================================================
+    if len <= 19 {
+        let mut val: u64 = 0;
+        let mut frac_digits: i8 = -1;
 
-        // Fast path for digits 0-9
-        if b >= b'0' && b <= b'9' {
-            // Check overflow before mul: u128::MAX / 10 is roughly 3.4e37
-            // Dec19x19 max repr is ~1.7e38 range, encoded in i128.
-            // We use wrapping mul here for speed, check overflow later or rely on logical limits
-            // given the struct size is known.
-            val = val.wrapping_mul(10).wrapping_add((b - b'0') as u128);
-            if frac_found {
+        // Native 64-bit loop. Extremely fast. No overflow checks needed.
+        for &b in bytes {
+            let digit = b.wrapping_sub(b'0');
+            if digit < 10 {
+                val = val.wrapping_mul(10).wrapping_add(digit as u64);
+                if frac_digits >= 0 {
+                    frac_digits += 1;
+                }
+            } else if b == b'.' {
+                if frac_digits >= 0 { return Err("Multiple decimal points found".to_string()); }
+                frac_digits = 0;
+            } else if b == b'_' {
+                continue;
+            } else if b == b'e' || b == b'E' {
+                return std::str::FromStr::from_str(s).map_err(|_| "Invalid number".to_string());
+            } else {
+                return Err(format!("Invalid character: {}", b as char));
+            }
+        }
+
+        let frac_digits = frac_digits.max(0) as usize;
+        
+        // Cast to u128 BEFORE scaling to prevent overflow on the scale multiplier
+        let mut val_128 = val as u128;
+        if frac_digits < 19 {
+            val_128 = val_128.wrapping_mul(POWERS_OF_TEN_128[19 - frac_digits]);
+        }
+
+        let result = val_128 as i128;
+        return Ok(if negative { -result } else { result });
+    }
+
+    // ====================================================================
+    // SLOW PATH: Long numbers requiring full 128-bit math
+    // ====================================================================
+    let mut val_128: u128 = 0;
+    let mut frac_digits: i8 = -1;
+    let mut total_digits = 0;
+
+    for &b in bytes {
+        let digit = b.wrapping_sub(b'0');
+        if digit < 10 {
+            total_digits += 1;
+            if total_digits > 38 { return Err("Overflow".to_string()); }
+            
+            val_128 = val_128.wrapping_mul(10).wrapping_add(digit as u128);
+            if frac_digits >= 0 {
                 frac_digits += 1;
             }
         } else if b == b'.' {
-            if frac_found {
-                return Err("Multiple decimal points found".to_string());
-            }
-            frac_found = true;
-        } else if b == b'e' || b == b'E' {
-            // Scientific notation detected. Abort fast path, use standard crate parser.
-            // This preserves full compatibility while keeping the common path fast.
-            return std::str::FromStr::from_str(s).map_err(|_| "Invalid number".to_string());
+            if frac_digits >= 0 { return Err("Multiple decimal points found".to_string()); }
+            frac_digits = 0;
         } else if b == b'_' {
-            // Skip underscores
-            i += 1;
             continue;
+        } else if b == b'e' || b == b'E' {
+            return std::str::FromStr::from_str(s).map_err(|_| "Invalid number".to_string());
         } else {
             return Err(format!("Invalid character: {}", b as char));
         }
-
-        i += 1;
     }
 
-    // Apply scaling
+    let frac_digits = frac_digits.max(0) as usize;
     if frac_digits > 19 {
-        // Truncate logic if needed, or error.
-        // Standard parser usually parses excessive digits.
-        // For strict performance/correctness:
-        // Divide away extra precision or round?
-        // For safety/compatibility with existing impl, we handle 19 max in fast path:
-        return std::str::FromStr::from_str(s)
-            .map_err(|_| "Precision handling fallback".to_string());
-    } else if frac_digits < 19 {
-        // We need to multiply by 10^(19 - frac_digits)
-        let diff = 19 - frac_digits;
-        // Use lookup table from crate if available, or calc match
-        let scale = match diff {
-            0 => 1,
-            1 => 10,
-            2 => 100,
-            3 => 1000,
-            4 => 10000,
-            5 => 100000,
-            6 => 1_000_000,
-            7 => 10_000_000,
-            8 => 100_000_000,
-            9 => 1_000_000_000,
-            10 => 10_000_000_000,
-            11 => 100_000_000_000,
-            12 => 1_000_000_000_000,
-            13 => 10_000_000_000_000,
-            14 => 100_000_000_000_000,
-            15 => 1_000_000_000_000_000,
-            16 => 10_000_000_000_000_000,
-            17 => 100_000_000_000_000_000,
-            18 => 1_000_000_000_000_000_000,
-            19 => 10_000_000_000_000_000_000,
-            _ => return Err("Scale error".to_string()),
-        };
-        val = val.wrapping_mul(scale);
+        return std::str::FromStr::from_str(s).map_err(|_| "Precision handling fallback".to_string());
     }
 
-    // Convert to i128 with sign
-    if val > i128::MAX as u128 && !negative {
-        return Err("Overflow".to_string());
+    if frac_digits < 19 {
+        val_128 = val_128.wrapping_mul(POWERS_OF_TEN_128[19 - frac_digits]);
     }
 
-    // Boundary check for i128::MIN (abs value is 1 higher than MAX)
-    if negative && val > (i128::MAX as u128) + 1 {
-        return Err("Underflow".to_string());
-    }
-
-    let result = if negative {
-        (val as i128).wrapping_neg()
+    // Boundaries check for 128-bit path
+    if negative {
+        if val_128 > (i128::MAX as u128) + 1 { return Err("Underflow".to_string()); }
+        Ok((val_128 as i128).wrapping_neg())
     } else {
-        val as i128
-    };
-
-    Ok(result)
+        if val_128 > i128::MAX as u128 { return Err("Overflow".to_string()); }
+        Ok(val_128 as i128)
+    }
 }
 
 fn _parse_dec19x19_internal(s: &str) -> Result<i128, ParseDec19x19Error> {

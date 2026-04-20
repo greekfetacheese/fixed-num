@@ -2417,7 +2417,7 @@ mod dec19x19_test {
 
         let int: i64 = -1350;
         let dec = Dec19x19::from(int);
-        assert_eq!(dec, Dec19x19!(-1350));
+        assert_eq!(dec, -Dec19x19!(1350));
     }
 
     #[test]

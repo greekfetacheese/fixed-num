@@ -4,3 +4,5 @@
 **/dist
 **/wasm-pack.log
 **/.idea
+/crates/bench/target
+/crates/bench/serde_results.html

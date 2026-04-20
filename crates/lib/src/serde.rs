@@ -124,19 +124,16 @@ impl<'de> Deserialize<'de> for Dec19x19 {
                 formatter.write_str("a fixed-point decimal string or number")
             }
 
-            // Optimized Path: Handle &str directly without allocation
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
                let repr = parse_dec19x19(v).map_err(E::custom)?;
                Ok(Dec19x19::from_repr(repr))
             }
 
-            // Fallback for owned strings (rare in optimized hot paths)
             fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
                let repr = parse_dec19x19(&v).map_err(E::custom)?;
                Ok(Dec19x19::from_repr(repr))
             }
 
-            // Handle pure numbers (e.g. JSON numbers without quotes)
             fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
                 Ok(Dec19x19::from(v))
             }

@@ -1,6 +1,5 @@
-use criterion::{black_box, criterion_group, Criterion};
+use criterion::{black_box, Criterion};
 use std::str::FromStr;
-use std::fmt::Debug;
 use paste::paste;
 use std::path::{Path, PathBuf};
 use std::io::Write;
@@ -16,10 +15,6 @@ const WORKSPACE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 fn out_dir() -> PathBuf {
     Path::new(WORKSPACE_ROOT).join("target").join("criterion")
-}
-
-fn config() -> Criterion {
-    Criterion::default().noise_threshold(1.0).output_directory(&out_dir())
 }
 
 #[derive(Debug, Default)]
@@ -56,7 +51,7 @@ fn normalize_by(input: Vec<Option<f64>>, ix: usize) -> Vec<Option<f64>> {
 
 fn after_benchmarks(ops: &[&str], libs: &[&str]) {
     let out_dir = out_dir();
-    let results = &ops.iter().map(|op| {
+    let results = ops.iter().map(|op| {
         let results = libs.iter().map(|lib| {
             let path = out_dir.join(format!("{op} {lib}")).join("new").join("estimates.json");
             path.exists().then(|| {
@@ -94,11 +89,9 @@ fn after_benchmarks(ops: &[&str], libs: &[&str]) {
             let fg_opacity = if norm == 1.0 || result.is_none() { 1.0 } else { 0.5 };
             let fg = format!("rgba(255, 255, 255, {fg_opacity})");
             let font = if norm == 1.0 { "bold" } else { "normal" };
-            let style = format!("\
-                style=\"color: {fg};\
-                background-color: {bg};\
-                font-weight: {font};\"\
-            ").replace("  ", " ");
+            let style = format!(
+                "style=\"color: {fg}; background-color: {bg}; font-weight: {font};\""
+            ).replace("  ", " ");
             match result {
                 Some(value) => out.line(&format!("<td {style}>{value:.2}</td>")),
                 None => out.line(&format!("<td {style}>⚠️</td>")),
@@ -115,36 +108,32 @@ fn after_benchmarks(ops: &[&str], libs: &[&str]) {
 }
 
 macro_rules! def_serde_bench {
-    (serialize for [$($t:ty),* $(,)?] ) => {
+    (serialize for [$($t:ty),* $(,)?]) => {
         paste! {
             $(
                 #[allow(non_snake_case)]
-                fn [<bench_serialize_ $t:snake>] (c: &mut Criterion) {
+                fn [<bench_serialize_ $t:snake>](c: &mut Criterion) {
                     let label = format!("serialize {}", stringify!($t));
                     let mut series = Series::new(0..=9, 0..=19);
                     series.seed = 7;
                     let s_series = validator::series_str::<fixed_num>(series);
                     let t_vec: Vec<$t> = s_series.iter().map(|s| black_box(<$t>::from_str(s).unwrap())).collect();
-                    c.bench_function(&label, |bencher| bencher.iter(||
-                        for t in t_vec.iter() {
-                            black_box(to_string(t).unwrap());
-                        }
-                    ));
+                    c.bench_function(&label, |bencher| {
+                        bencher.iter(|| {
+                            for t in &t_vec {
+                                black_box(to_string(t).unwrap());
+                            }
+                        })
+                    });
                 }
             )*
-
-            criterion_group! {
-                name = serialize;
-                config = config();
-                targets = $( [<bench_serialize_ $t:snake>] , )*
-            }
         }
     };
-    (deserialize for [$($t:ty),* $(,)?] ) => {
+    (deserialize for [$($t:ty),* $(,)?]) => {
         paste! {
             $(
                 #[allow(non_snake_case)]
-                fn [<bench_deserialize_ $t:snake>] (c: &mut Criterion) {
+                fn [<bench_deserialize_ $t:snake>](c: &mut Criterion) {
                     let label = format!("deserialize {}", stringify!($t));
                     let mut series = Series::new(0..=9, 0..=19);
                     series.seed = 7;
@@ -152,19 +141,15 @@ macro_rules! def_serde_bench {
                     let json_vec: Vec<String> = s_series.iter().map(|s| {
                         format!(r#""{}""#, s)
                     }).collect();
-                    c.bench_function(&label, |bencher| bencher.iter(||
-                        for js in &json_vec {
-                            black_box(from_str::<$t>(js).unwrap());
-                        }
-                    ));
+                    c.bench_function(&label, |bencher| {
+                        bencher.iter(|| {
+                            for js in &json_vec {
+                                black_box(from_str::<$t>(js).unwrap());
+                            }
+                        })
+                    });
                 }
             )*
-
-            criterion_group! {
-                name = deserialize;
-                config = config();
-                targets = $( [<bench_deserialize_ $t:snake>] , )*
-            }
         }
     };
 }
@@ -172,14 +157,59 @@ macro_rules! def_serde_bench {
 def_serde_bench!(serialize for [fixed_num, rust_decimal, bigdecimal, decimal_rs]);
 def_serde_bench!(deserialize for [fixed_num, rust_decimal, bigdecimal, decimal_rs]);
 
-    fn main() {
-        serialize();
-        deserialize();
-        Criterion::default()
-            .configure_from_args()
-            .final_summary();
+fn bench_serialize_f64(c: &mut Criterion) {
+    let label = "serialize f64";
+    let mut series = Series::new(0..=9, 0..=19);
+    series.seed = 7;
+    let s_series = validator::series_str::<fixed_num>(series);
+    let t_vec: Vec<f64> = s_series.iter().map(|s| black_box(f64::from_str(s).unwrap())).collect();
+    c.bench_function(&label, |bencher| {
+        bencher.iter(|| {
+            for t in &t_vec {
+                black_box(to_string(t).unwrap());
+            }
+        })
+    });
+}
 
-        let ops = &["serialize", "deserialize"];
-        let libs = &["fixed_num", "rust_decimal", "bigdecimal", "decimal_rs"];
-        after_benchmarks(ops, libs);
-    }
+fn bench_deserialize_f64(c: &mut Criterion) {
+    let label = "deserialize f64";
+    let mut series = Series::new(0..=9, 0..=19);
+    series.seed = 7;
+    let s_series = validator::series_str::<fixed_num>(series);
+    let json_vec: Vec<String> = s_series.iter().map(|s| format!("{}", s)).collect();
+    c.bench_function(&label, |bencher| {
+        bencher.iter(|| {
+            for js in &json_vec {
+                black_box(from_str::<f64>(js).unwrap());
+            }
+        })
+    });
+}
+
+fn main() {
+    let mut criterion = Criterion::default()
+        .noise_threshold(1.0)
+        .output_directory(&out_dir())
+        .configure_from_args();
+
+    // Serialize benchmarks
+   // bench_serialize_fixed_num(&mut criterion);
+   // bench_serialize_rust_decimal(&mut criterion);
+   // bench_serialize_bigdecimal(&mut criterion);
+   // bench_serialize_decimal_rs(&mut criterion);
+   // bench_serialize_f64(&mut criterion);
+
+    // Deserialize benchmarks
+    bench_deserialize_fixed_num(&mut criterion);
+    bench_deserialize_rust_decimal(&mut criterion);
+   // bench_deserialize_bigdecimal(&mut criterion);
+   // bench_deserialize_decimal_rs(&mut criterion);
+    bench_deserialize_f64(&mut criterion);
+
+    criterion.final_summary();
+
+    let ops = &["serialize", "deserialize"];
+    let libs = &["fixed_num", "rust_decimal", "bigdecimal", "decimal_rs", "f64"];
+    after_benchmarks(ops, libs);
+}
