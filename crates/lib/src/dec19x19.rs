@@ -2439,4 +2439,17 @@ mod dec19x19_test {
         let dec = Dec19x19::from_str("1350.60").unwrap();
         assert_eq!(dec, Dec19x19!(1350.60));
     }
+
+    #[test]
+    fn test_from_str_very_small() {
+        let dec = Dec19x19::from_str("0.00000135060").unwrap();
+        assert_eq!(dec, Dec19x19!(0.00000135060));
+    }
+
+    #[test]
+    fn test_from_str_very_large() {
+        let dec = Dec19x19::from_str("62514264337593543950335.1815625").unwrap();
+        assert_eq!(dec, Dec19x19!(62514264337593543950335.1815625));
+    }
+
 }
