@@ -6,6 +6,8 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::str::FromStr;
 
+use std::hash::Hash;
+
 pub use fixed_num_macro::*;
 
 // ============
@@ -69,6 +71,12 @@ const LN_2_I256: i256 = i256_from_i128(Dec19x19::LN_2.repr);
 #[repr(transparent)]
 pub struct Dec19x19 {
     pub repr: i128,
+}
+
+impl Hash for Dec19x19 {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.repr.hash(state);
+    }
 }
 
 impl Dec19x19 {
