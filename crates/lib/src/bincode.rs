@@ -1,7 +1,10 @@
 #![cfg(feature = "bincode")]
 use crate::*;
 
-use bincode_next::{Decode, Encode};
+use bincode_next::{
+    Decode, Encode,
+    de::{BorrowDecode, BorrowDecoder},
+};
 
 impl Encode for Dec19x19 {
     fn encode<E: bincode_next::enc::Encoder>(
@@ -21,6 +24,14 @@ where
     ) -> Result<Self, bincode_next::error::DecodeError> {
         let repr = i128::decode(decoder)?;
         Ok(Self { repr })
+    }
+}
+
+impl<'de, C> BorrowDecode<'de, C> for Dec19x19 {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        Decode::decode(decoder)
     }
 }
 
